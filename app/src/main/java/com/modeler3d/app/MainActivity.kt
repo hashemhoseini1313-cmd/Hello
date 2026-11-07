@@ -85,6 +85,12 @@ class MainActivity : Activity() {
             setOnClickListener { saveKey() }
         }
 
+        val testBtn = Button(this).apply {
+            text = "تست کلید (بدون مصرف اعتبار)"
+            typeface = font
+            setOnClickListener { testKey() }
+        }
+
         val deleteBtn = Button(this).apply {
             text = "حذف کلید"
             typeface = font
@@ -142,6 +148,7 @@ class MainActivity : Activity() {
             LinearLayout.LayoutParams.WRAP_CONTENT
         ))
         content.addView(saveBtn)
+        content.addView(testBtn)
         content.addView(deleteBtn)
         content.addView(status)
         content.addView(pickBtn)
@@ -157,7 +164,9 @@ class MainActivity : Activity() {
     }
 
     private fun saveKey() {
-        val k = keyInput.text.toString().trim()
+        val raw = keyInput.text.toString()
+        // فقط حروف انگلیسی، عدد و علامت‌های معمولی؛ کاراکترهای نامرئی حذف می‌شوند
+        val k = raw.filter { it.code in 33..126 }
         if (k.isEmpty()) {
             status.text = "ابتدا کلید را وارد کنید"
             return
@@ -168,6 +177,10 @@ class MainActivity : Activity() {
             val imm = getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager
             imm.hideSoftInputFromWindow(keyInput.windowToken, 0)
             refreshStatus()
+            if (k.length != raw.length) {
+                progressText.text = "توجه: " + (raw.length - k.length) +
+                        " کاراکتر اضافه یا نامرئی از کلید حذف شد."
+            }
         } catch (e: Exception) {
             status.text = "خطا در ذخیره: " + e.message
         }
@@ -178,8 +191,22 @@ class MainActivity : Activity() {
         status.text = if (k == null) {
             "هنوز کلیدی ذخیره نشده است"
         } else {
-            "کلید ذخیره شده ✅  (••••" + k.takeLast(4) + ")"
+            "کلید ذخیره شده ✅\nشروع: " + k.take(4) + "  پایان: " + k.takeLast(4) +
+                    "  طول: " + k.length
         }
+    }
+
+    private fun testKey() {
+        val key = store.loadTripoKey()
+        if (key == null) {
+            progressText.text = "ابتدا کلید Tripo را ذخیره کنید"
+            return
+        }
+        progressText.text = "در حال تست کلید…"
+        Thread {
+            val result = TripoClient(key).diagnose()
+            runOnUiThread { progressText.text = result }
+        }.start()
     }
 
     private fun pickImage() {
