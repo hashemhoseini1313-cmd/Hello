@@ -8,12 +8,17 @@ import java.net.URL
 class TripoClient(private val apiKey: String) {
 
     companion object {
-        // اگر کلید را از سایت platform.tripo3d.com گرفته‌اید، .ai را به .com تغییر دهید
-        const val BASE_URL = "https://openapi.tripo3d.ai/v3"
+        // برنامه به ترتیب هر دو سرور را امتحان می‌کند (کلید هر منطقه فقط روی سرور خودش کار می‌کند)
+        val BASE_URLS = listOf(
+            "https://openapi.tripo3d.ai/v3",
+            "https://openapi.tripo3d.com/v3"
+        )
         const val MODEL_VERSION = "v3.1-20260211"
     }
 
     class TripoException(message: String) : Exception(message)
+
+    private var base = BASE_URLS[0]
 
     private fun readBody(conn: HttpURLConnection): String {
         val stream = if (conn.responseCode in 200..299) conn.inputStream else conn.errorStream
@@ -33,33 +38,43 @@ class TripoClient(private val apiKey: String) {
     }
 
     fun uploadImage(jpeg: ByteArray): String {
-        val boundary = "----Modeler" + System.currentTimeMillis()
-        val head = ("--" + boundary + "\r\n" +
-                "Content-Disposition: form-data; name=\"file\"; filename=\"image.jpg\"\r\n" +
-                "Content-Type: image/jpeg\r\n\r\n").toByteArray()
-        val tail = ("\r\n--" + boundary + "--\r\n").toByteArray()
+        var lastError = ""
+        for (candidate in BASE_URLS) {
+            val boundary = "----Modeler" + System.currentTimeMillis()
+            val head = ("--" + boundary + "\r\n" +
+                    "Content-Disposition: form-data; name=\"file\"; filename=\"image.jpg\"\r\n" +
+                    "Content-Type: image/jpeg\r\n\r\n").toByteArray()
+            val tail = ("\r\n--" + boundary + "--\r\n").toByteArray()
 
-        val conn = URL("$BASE_URL/files").openConnection() as HttpURLConnection
-        conn.requestMethod = "POST"
-        conn.doOutput = true
-        conn.connectTimeout = 30000
-        conn.readTimeout = 120000
-        conn.setRequestProperty("Authorization", "Bearer $apiKey")
-        conn.setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
-        conn.setFixedLengthStreamingMode(head.size + jpeg.size + tail.size)
-        conn.outputStream.use { out ->
-            out.write(head)
-            out.write(jpeg)
-            out.write(tail)
-        }
+            val conn = URL("$candidate/files").openConnection() as HttpURLConnection
+            conn.requestMethod = "POST"
+            conn.doOutput = true
+            conn.connectTimeout = 30000
+            conn.readTimeout = 120000
+            conn.setRequestProperty("Authorization", "Bearer $apiKey")
+            conn.setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
+            conn.setFixedLengthStreamingMode(head.size + jpeg.size + tail.size)
+            conn.outputStream.use { out ->
+                out.write(head)
+                out.write(jpeg)
+                out.write(tail)
+            }
 
-        val body = readBody(conn)
-        if (conn.responseCode !in 200..299) {
-            throw TripoException("آپلود ناموفق (" + conn.responseCode + "): " + body)
+            val code = conn.responseCode
+            val body = readBody(conn)
+            if (code == 401) {
+                lastError = "($candidate) $body"
+                continue
+            }
+            if (code !in 200..299) {
+                throw TripoException("آپلود ناموفق ($code): $body")
+            }
+            val token = dataOf(body).optString("file_token", "")
+            if (token.isEmpty()) throw TripoException("file_token دریافت نشد: $body")
+            base = candidate
+            return token
         }
-        val token = dataOf(body).optString("file_token", "")
-        if (token.isEmpty()) throw TripoException("file_token دریافت نشد: $body")
-        return token
+        throw TripoException("کلید در هر دو سرور (.ai و .com) نامعتبر شناخته شد: $lastError")
     }
 
     fun createTask(fileToken: String): String {
@@ -70,7 +85,7 @@ class TripoClient(private val apiKey: String) {
             .put("pbr", true)
         val bytes = payload.toString().toByteArray()
 
-        val conn = URL("$BASE_URL/generation/image-to-model").openConnection() as HttpURLConnection
+        val conn = URL("$base/generation/image-to-model").openConnection() as HttpURLConnection
         conn.requestMethod = "POST"
         conn.doOutput = true
         conn.connectTimeout = 30000
@@ -92,7 +107,7 @@ class TripoClient(private val apiKey: String) {
     fun waitForModelUrl(taskId: String, onProgress: (String, Int) -> Unit): String {
         val deadline = System.currentTimeMillis() + 10 * 60 * 1000
         while (System.currentTimeMillis() < deadline) {
-            val conn = URL("$BASE_URL/tasks/$taskId").openConnection() as HttpURLConnection
+            val conn = URL("$base/tasks/$taskId").openConnection() as HttpURLConnection
             conn.requestMethod = "GET"
             conn.connectTimeout = 30000
             conn.readTimeout = 60000
