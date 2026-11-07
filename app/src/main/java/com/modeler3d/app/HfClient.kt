@@ -5,7 +5,6 @@ import org.json.JSONObject
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
-import java.util.UUID
 import kotlin.random.Random
 
 class HfClient(spaceInput: String, private val token: String?) {
@@ -28,7 +27,6 @@ class HfClient(spaceInput: String, private val token: String?) {
     }
 
     private val host = normalizeHost(spaceInput)
-    private val sessionHash = UUID.randomUUID().toString().replace("-", "").take(11)
 
     private fun open(url: String, method: String): HttpURLConnection {
         val conn = URL(url).openConnection() as HttpURLConnection
@@ -180,10 +178,7 @@ class HfClient(spaceInput: String, private val token: String?) {
 
     fun callEndpoint(apiName: String, data: JSONArray, onEvent: (String) -> Unit): JSONArray {
         val name = apiName.trimStart('/')
-        val payload = JSONObject()
-            .put("data", data)
-            .put("session_hash", sessionHash)
-            .toString().toByteArray()
+        val payload = JSONObject().put("data", data).toString().toByteArray()
 
         val post = open("$host/gradio_api/call/$name", "POST")
         post.doOutput = true
@@ -219,7 +214,7 @@ class HfClient(spaceInput: String, private val token: String?) {
                     val payloadText = line.substring(5).trim()
                     when (event) {
                         "complete" -> return JSONArray(payloadText)
-                        "error" -> throw HfException("خطای Space: $payloadText")
+                        "error" -> throw HfException("خطای Space ($name): $payloadText")
                         else -> onEvent(event)
                     }
                 }
