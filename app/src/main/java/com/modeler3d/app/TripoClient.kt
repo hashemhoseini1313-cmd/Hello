@@ -37,6 +37,33 @@ class TripoClient(private val apiKey: String) {
         return json.optJSONObject("data") ?: throw TripoException("پاسخ بدون data: $body")
     }
 
+    // تست کلید با پرسیدن موجودی حساب (اعتباری مصرف نمی‌کند)
+    fun diagnose(): String {
+        val sb = StringBuilder()
+        val targets = listOf(
+            "v3 .ai" to "https://openapi.tripo3d.ai/v3/account/balance",
+            "v3 .com" to "https://openapi.tripo3d.com/v3/account/balance",
+            "v2 .ai" to "https://api.tripo3d.ai/v2/openapi/user/balance",
+            "v2 .com" to "https://api.tripo3d.com/v2/openapi/user/balance"
+        )
+        for ((name, url) in targets) {
+            try {
+                val conn = URL(url).openConnection() as HttpURLConnection
+                conn.connectTimeout = 15000
+                conn.readTimeout = 15000
+                conn.setRequestProperty("Authorization", "Bearer $apiKey")
+                val code = conn.responseCode
+                val body = readBody(conn)
+                sb.append(name).append(" : ").append(code).append("  ")
+                    .append(body.take(120)).append("\n\n")
+            } catch (e: Exception) {
+                sb.append(name).append(" : ").append(e.javaClass.simpleName)
+                    .append("\n\n")
+            }
+        }
+        return sb.toString()
+    }
+
     fun uploadImage(jpeg: ByteArray): String {
         var lastError = ""
         for (candidate in BASE_URLS) {
