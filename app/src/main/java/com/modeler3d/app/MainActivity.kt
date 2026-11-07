@@ -14,6 +14,8 @@ import android.widget.Button
 import android.widget.EditText
 import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.RadioButton
+import android.widget.RadioGroup
 import android.widget.ScrollView
 import android.widget.TextView
 import androidx.activity.ComponentActivity
@@ -40,6 +42,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var status: TextView
     private lateinit var tokenInput: EditText
     private lateinit var spaceInput: EditText
+    private lateinit var qualityGroup: RadioGroup
     private lateinit var preview: ImageView
     private lateinit var startBtn: Button
     private lateinit var progressText: TextView
@@ -50,6 +53,7 @@ class MainActivity : ComponentActivity() {
     private var selectedUris: List<Uri> = emptyList()
     private var busy = false
     private val pickRequest = 101
+    private val qualityIdBase = 1000
 
     private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
 
@@ -143,6 +147,33 @@ class MainActivity : ComponentActivity() {
             setOnClickListener { testConnection() }
         }
 
+        val qualityLabel = TextView(this).apply {
+            text = "کیفیت ساخت مدل"
+            textSize = 16f
+            typeface = font
+            setPadding(0, dp(16), 0, dp(4))
+        }
+
+        val savedQuality = getSharedPreferences("settings", MODE_PRIVATE)
+            .getInt("quality", 0)
+            .coerceIn(0, HfClient.PRESETS.size - 1)
+        qualityGroup = RadioGroup(this).apply {
+            orientation = RadioGroup.VERTICAL
+            layoutDirection = View.LAYOUT_DIRECTION_RTL
+            HfClient.PRESETS.forEachIndexed { i, q ->
+                addView(RadioButton(context).apply {
+                    id = qualityIdBase + i
+                    text = q.label
+                    typeface = font
+                })
+            }
+            check(qualityIdBase + savedQuality)
+            setOnCheckedChangeListener { _, checkedId ->
+                getSharedPreferences("settings", MODE_PRIVATE).edit()
+                    .putInt("quality", checkedId - qualityIdBase).apply()
+            }
+        }
+
         val pickBtn = Button(this).apply {
             text = "انتخاب عکس‌ها (چندتایی)"
             typeface = font
@@ -211,6 +242,8 @@ class MainActivity : ComponentActivity() {
             LinearLayout.LayoutParams.WRAP_CONTENT
         ))
         content.addView(testBtn)
+        content.addView(qualityLabel)
+        content.addView(qualityGroup)
         content.addView(pickBtn)
         content.addView(preview, LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT, dp(220)
@@ -237,6 +270,12 @@ class MainActivity : ComponentActivity() {
     private fun showModel(file: File) {
         modelState.value = file
         viewerView.visibility = View.VISIBLE
+    }
+
+    private fun selectedQuality(): HfClient.Quality {
+        val idx = (qualityGroup.checkedRadioButtonId - qualityIdBase)
+            .coerceIn(0, HfClient.PRESETS.size - 1)
+        return HfClient.PRESETS[idx]
     }
 
     private fun saveToken() {
@@ -341,6 +380,7 @@ class MainActivity : ComponentActivity() {
         }
         val space = currentSpace()
         val token = store.load("hf")
+        val quality = selectedQuality()
 
         busy = true
         startBtn.isEnabled = false
@@ -387,7 +427,7 @@ class MainActivity : ComponentActivity() {
 
                 val t1 = System.currentTimeMillis()
                 val genResult = client.callEndpoint(
-                    genName, client.buildArgs(info, genName, processed)
+                    genName, client.buildArgs(info, genName, processed, quality)
                 ) {
                     val sec = (System.currentTimeMillis() - t1) / 1000
                     postProgress("در حال ساخت مدل روی سرور رایگان… ($sec ثانیه)\nصبور باشید، ممکن است چند دقیقه طول بکشد.")
