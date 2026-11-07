@@ -16,6 +16,7 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import org.json.JSONArray
 import java.io.File
 
 class MainActivity : Activity() {
@@ -288,8 +289,19 @@ class MainActivity : Activity() {
                 val client = HfClient(space, token)
                 postProgress("در حال اتصال به Space…")
                 val info = client.fetchInfo()
-                val preName = client.findEndpoint(info, "/preprocess_image")
+                val preName = client.findEndpointOrNull(info, "/preprocess_images")
+                    ?: client.findEndpoint(info, "/preprocess_image")
                 val genName = client.findEndpoint(info, "/generate_and_extract_glb")
+
+                val startName = client.findEndpointOrNull(info, "/start_session")
+                if (startName != null) {
+                    postProgress("در حال شروع نشست…")
+                    try {
+                        client.callEndpoint(startName, JSONArray()) { }
+                    } catch (e: Exception) {
+                        // اگر شروع نشست خطا داد، ادامه می‌دهیم
+                    }
+                }
 
                 postProgress("در حال آپلود عکس…")
                 val uploaded = client.upload(jpeg, "image.jpg", "image/jpeg")
@@ -297,13 +309,15 @@ class MainActivity : Activity() {
                 val t0 = System.currentTimeMillis()
                 postProgress("در حال حذف پس‌زمینه…")
                 val preResult = client.callEndpoint(
-                    preName, client.buildArgs(info, preName, uploaded)
+                    preName, client.buildArgs(info, preName, listOf(uploaded))
                 ) {
                     val sec = (System.currentTimeMillis() - t0) / 1000
                     postProgress("در حال حذف پس‌زمینه… ($sec ثانیه)")
                 }
-                val processed = client.firstFile(preResult)
-                    ?: throw HfClient.HfException("خروجی حذف پس‌زمینه فایل نداشت: " + preResult.toString().take(200))
+                val processed = client.collectFiles(preResult)
+                if (processed.isEmpty()) {
+                    throw HfClient.HfException("خروجی حذف پس‌زمینه فایل نداشت: " + preResult.toString().take(200))
+                }
 
                 val t1 = System.currentTimeMillis()
                 val genResult = client.callEndpoint(
