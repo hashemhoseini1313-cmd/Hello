@@ -1,12 +1,12 @@
 package com.modeler3d.app
 
-import android.app.Activity
 import android.content.Intent
 import android.graphics.Typeface
 import android.net.Uri
 import android.os.Bundle
 import android.text.InputType
 import android.view.Gravity
+import android.view.MotionEvent
 import android.view.View
 import android.view.WindowInsets
 import android.view.inputmethod.InputMethodManager
@@ -16,11 +16,25 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import androidx.activity.ComponentActivity
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.ComposeView
+import io.github.sceneview.Scene
+import io.github.sceneview.node.ModelNode
+import io.github.sceneview.rememberCameraManipulator
+import io.github.sceneview.rememberEngine
+import io.github.sceneview.rememberModelLoader
+import io.github.sceneview.rememberNodes
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.nio.ByteBuffer
 
-class MainActivity : Activity() {
+class MainActivity : ComponentActivity() {
 
     private lateinit var store: SecureStore
     private lateinit var status: TextView
@@ -30,6 +44,8 @@ class MainActivity : Activity() {
     private lateinit var startBtn: Button
     private lateinit var progressText: TextView
     private lateinit var resultText: TextView
+    private lateinit var viewerView: ComposeView
+    private val modelState = mutableStateOf<File?>(null)
     private var font: Typeface? = null
     private var selectedUris: List<Uri> = emptyList()
     private var busy = false
@@ -161,6 +177,25 @@ class MainActivity : Activity() {
             setPadding(0, dp(8), 0, 0)
         }
 
+        viewerView = ComposeView(this).apply {
+            visibility = View.GONE
+            setOnTouchListener { v, event ->
+                when (event.actionMasked) {
+                    MotionEvent.ACTION_DOWN ->
+                        v.parent?.requestDisallowInterceptTouchEvent(true)
+                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL ->
+                        v.parent?.requestDisallowInterceptTouchEvent(false)
+                }
+                false
+            }
+            setContent {
+                val file = modelState.value
+                if (file != null) {
+                    ModelViewer(file) { msg -> postProgress(msg) }
+                }
+            }
+        }
+
         content.addView(title)
         content.addView(tokenLabel)
         content.addView(tokenInput, LinearLayout.LayoutParams(
@@ -183,9 +218,25 @@ class MainActivity : Activity() {
         content.addView(startBtn)
         content.addView(progressText)
         content.addView(resultText)
+        content.addView(viewerView, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, dp(380)
+        ))
         setContentView(scroll)
 
         refreshStatus()
+        loadLastModel()
+    }
+
+    private fun loadLastModel() {
+        val dir = File(filesDir, "models")
+        val last = dir.listFiles { f -> f.name.endsWith(".glb") }
+            ?.maxByOrNull { it.lastModified() }
+        if (last != null) showModel(last)
+    }
+
+    private fun showModel(file: File) {
+        modelState.value = file
+        viewerView.visibility = View.VISIBLE
     }
 
     private fun saveToken() {
@@ -353,6 +404,7 @@ class MainActivity : Activity() {
                     progressText.text = "تمام شد ✅"
                     resultText.text = "فایل GLB ذخیره شد:\n" + file.name +
                             "\nحجم: " + (file.length() / 1024) + " کیلوبایت"
+                    showModel(file)
                     busy = false
                     startBtn.isEnabled = true
                 }
@@ -365,4 +417,33 @@ class MainActivity : Activity() {
             }
         }.start()
     }
+}
+
+@Composable
+private fun ModelViewer(file: File, onError: (String) -> Unit) {
+    val engine = rememberEngine()
+    val modelLoader = rememberModelLoader(engine)
+    val nodes = rememberNodes()
+
+    LaunchedEffect(file) {
+        try {
+            val bytes = file.readBytes()
+            val buffer = ByteBuffer.allocateDirect(bytes.size)
+            buffer.put(bytes)
+            buffer.rewind()
+            val instance = modelLoader.createModelInstance(buffer)
+            nodes.clear()
+            nodes.add(ModelNode(modelInstance = instance, scaleToUnits = 1.0f))
+        } catch (e: Exception) {
+            onError("خطا در نمایش مدل: " + e.message)
+        }
+    }
+
+    Scene(
+        modifier = Modifier.fillMaxSize(),
+        engine = engine,
+        modelLoader = modelLoader,
+        cameraManipulator = rememberCameraManipulator(),
+        childNodes = nodes
+    )
 }
