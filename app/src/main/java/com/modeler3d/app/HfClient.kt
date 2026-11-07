@@ -5,6 +5,7 @@ import org.json.JSONObject
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.UUID
 import kotlin.random.Random
 
 class HfClient(spaceInput: String, private val token: String?) {
@@ -12,7 +13,7 @@ class HfClient(spaceInput: String, private val token: String?) {
     class HfException(message: String) : Exception(message)
 
     companion object {
-        const val DEFAULT_SPACE = "vaibhavpandeyvpz/trellis-image-to-3d"
+        const val DEFAULT_SPACE = "Stable-X/ReconViaGen"
 
         fun normalizeHost(input: String): String {
             var s = input.trim().trimEnd('/')
@@ -27,6 +28,7 @@ class HfClient(spaceInput: String, private val token: String?) {
     }
 
     private val host = normalizeHost(spaceInput)
+    private val sessionHash = UUID.randomUUID().toString().replace("-", "").take(11)
 
     private fun open(url: String, method: String): HttpURLConnection {
         val conn = URL(url).openConnection() as HttpURLConnection
@@ -79,15 +81,23 @@ class HfClient(spaceInput: String, private val token: String?) {
         return sb.toString()
     }
 
-    fun findEndpoint(info: JSONObject, exact: String): String {
-        val eps = info.optJSONObject("named_endpoints")
-            ?: throw HfException("لیست endpointها در مشخصات Space نبود")
+    fun findEndpointOrNull(info: JSONObject, exact: String): String? {
+        val eps = info.optJSONObject("named_endpoints") ?: return null
         if (eps.has(exact)) return exact
         val names = ArrayList<String>()
         val keys = eps.keys()
         while (keys.hasNext()) names.add(keys.next())
         val re = Regex(Regex.escape(exact) + "(_\\d+)?")
-        names.firstOrNull { re.matches(it) }?.let { return it }
+        return names.firstOrNull { re.matches(it) }
+    }
+
+    fun findEndpoint(info: JSONObject, exact: String): String {
+        val eps = info.optJSONObject("named_endpoints")
+            ?: throw HfException("لیست endpointها در مشخصات Space نبود")
+        findEndpointOrNull(info, exact)?.let { return it }
+        val names = ArrayList<String>()
+        val keys = eps.keys()
+        while (keys.hasNext()) names.add(keys.next())
         throw HfException(
             "endpoint «$exact» در این Space پیدا نشد. موجود: " + names.joinToString(", ")
         )
@@ -125,7 +135,15 @@ class HfClient(spaceInput: String, private val token: String?) {
             .put("meta", JSONObject().put("_type", "gradio.FileData"))
     }
 
-    fun buildArgs(info: JSONObject, endpoint: String, file: JSONObject): JSONArray {
+    private fun galleryOf(files: List<JSONObject>): JSONArray {
+        val arr = JSONArray()
+        for (f in files) {
+            arr.put(JSONObject().put("image", f).put("caption", JSONObject.NULL))
+        }
+        return arr
+    }
+
+    fun buildArgs(info: JSONObject, endpoint: String, files: List<JSONObject>): JSONArray {
         val ep = info.getJSONObject("named_endpoints").getJSONObject(endpoint)
         val params = ep.getJSONArray("parameters")
         val out = JSONArray()
@@ -133,24 +151,27 @@ class HfClient(spaceInput: String, private val token: String?) {
             val p = params.getJSONObject(i)
             val pname = p.optString("parameter_name", "")
             val comp = p.optString("component", "")
+            val hasDefault = p.optBoolean("parameter_has_default", false)
+            val def: Any? = if (hasDefault) p.opt("parameter_default") else null
+            val usableDefault = def != null && def != JSONObject.NULL
             val known: Any? = when (pname) {
-                "seed" -> Random.nextInt(0, 2000000000)
                 "ss_guidance_strength" -> 7.5
                 "ss_sampling_steps" -> 12
                 "slat_guidance_strength" -> 3.0
                 "slat_sampling_steps" -> 12
                 "multiimage_algo" -> "stochastic"
                 "mesh_simplify" -> 0.95
-                "texture_size" -> 1024
                 "is_multiimage" -> false
                 else -> null
             }
             when {
-                comp == "Image" || pname == "image" -> out.put(file)
-                comp == "Gallery" || pname == "multiimages" -> out.put(JSONArray())
+                pname == "seed" -> out.put(Random.nextInt(0, 2000000000))
+                pname == "texture_size" -> out.put(2048)
+                comp == "Gallery" || pname == "multiimages" || pname == "images" ->
+                    out.put(galleryOf(files))
+                comp == "Image" || pname == "image" -> out.put(files.first())
+                usableDefault -> out.put(def)
                 known != null -> out.put(known)
-                p.optBoolean("parameter_has_default", false) ->
-                    out.put(p.opt("parameter_default") ?: JSONObject.NULL)
                 else -> out.put(JSONObject.NULL)
             }
         }
@@ -159,7 +180,10 @@ class HfClient(spaceInput: String, private val token: String?) {
 
     fun callEndpoint(apiName: String, data: JSONArray, onEvent: (String) -> Unit): JSONArray {
         val name = apiName.trimStart('/')
-        val payload = JSONObject().put("data", data).toString().toByteArray()
+        val payload = JSONObject()
+            .put("data", data)
+            .put("session_hash", sessionHash)
+            .toString().toByteArray()
 
         val post = open("$host/gradio_api/call/$name", "POST")
         post.doOutput = true
@@ -210,6 +234,28 @@ class HfClient(spaceInput: String, private val token: String?) {
             if (o.has("path") || o.has("url")) return o
         }
         return null
+    }
+
+    fun collectFiles(node: Any?): List<JSONObject> {
+        val found = ArrayList<JSONObject>()
+        collectFilesInto(node, found)
+        return found
+    }
+
+    private fun collectFilesInto(node: Any?, found: MutableList<JSONObject>) {
+        when (node) {
+            is JSONArray -> {
+                for (i in 0 until node.length()) collectFilesInto(node.opt(i), found)
+            }
+            is JSONObject -> {
+                if (node.optString("path", "").isNotEmpty()) {
+                    found.add(node)
+                } else {
+                    val keys = node.keys()
+                    while (keys.hasNext()) collectFilesInto(node.opt(keys.next()), found)
+                }
+            }
+        }
     }
 
     fun findGlbUrl(node: Any?): String? {
