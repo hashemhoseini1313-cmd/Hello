@@ -32,19 +32,19 @@ class SecureStore(context: Context) {
         return gen.generateKey()
     }
 
-    fun saveTripoKey(value: String) {
+    fun save(name: String, value: String) {
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(Cipher.ENCRYPT_MODE, getKey())
         val enc = cipher.doFinal(value.toByteArray(Charsets.UTF_8))
         prefs.edit()
-            .putString("iv", Base64.encodeToString(cipher.iv, Base64.NO_WRAP))
-            .putString("data", Base64.encodeToString(enc, Base64.NO_WRAP))
+            .putString(name + "_iv", Base64.encodeToString(cipher.iv, Base64.NO_WRAP))
+            .putString(name + "_data", Base64.encodeToString(enc, Base64.NO_WRAP))
             .apply()
     }
 
-    fun loadTripoKey(): String? {
-        val iv = prefs.getString("iv", null) ?: return null
-        val data = prefs.getString("data", null) ?: return null
+    fun load(name: String): String? {
+        val iv = prefs.getString(name + "_iv", null) ?: return null
+        val data = prefs.getString(name + "_data", null) ?: return null
         return try {
             val cipher = Cipher.getInstance("AES/GCM/NoPadding")
             cipher.init(
@@ -58,7 +58,10 @@ class SecureStore(context: Context) {
         }
     }
 
-    fun clearTripoKey() {
-        prefs.edit().clear().apply()
+    fun clear(name: String) {
+        prefs.edit()
+            .remove(name + "_iv")
+            .remove(name + "_data")
+            .apply()
     }
 }
