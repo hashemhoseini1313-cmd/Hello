@@ -17,6 +17,7 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import org.json.JSONArray
+import org.json.JSONObject
 import java.io.File
 
 class MainActivity : Activity() {
@@ -30,7 +31,7 @@ class MainActivity : Activity() {
     private lateinit var progressText: TextView
     private lateinit var resultText: TextView
     private var font: Typeface? = null
-    private var selectedUri: Uri? = null
+    private var selectedUris: List<Uri> = emptyList()
     private var busy = false
     private val pickRequest = 101
 
@@ -127,7 +128,7 @@ class MainActivity : Activity() {
         }
 
         val pickBtn = Button(this).apply {
-            text = "انتخاب عکس"
+            text = "انتخاب عکس‌ها (چندتایی)"
             typeface = font
             setOnClickListener { pickImage() }
         }
@@ -242,21 +243,34 @@ class MainActivity : Activity() {
         val intent = Intent(Intent.ACTION_GET_CONTENT).apply {
             type = "image/*"
             addCategory(Intent.CATEGORY_OPENABLE)
+            putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
         }
-        startActivityForResult(Intent.createChooser(intent, "انتخاب عکس"), pickRequest)
+        startActivityForResult(Intent.createChooser(intent, "انتخاب عکس‌ها"), pickRequest)
     }
 
     @Deprecated("Deprecated in Java")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode != pickRequest || resultCode != RESULT_OK) return
-        val uri = data?.data ?: return
+        if (requestCode != pickRequest || resultCode != RESULT_OK || data == null) return
+
+        val uris = ArrayList<Uri>()
+        val clip = data.clipData
+        if (clip != null) {
+            for (i in 0 until clip.itemCount) {
+                clip.getItemAt(i).uri?.let { uris.add(it) }
+            }
+        } else {
+            data.data?.let { uris.add(it) }
+        }
+        if (uris.isEmpty()) return
+
         try {
-            preview.setImageBitmap(ImageUtil.thumbnail(this, uri))
+            preview.setImageBitmap(ImageUtil.thumbnail(this, uris[0]))
             preview.visibility = View.VISIBLE
-            selectedUri = uri
+            selectedUris = uris
             startBtn.isEnabled = !busy
-            progressText.text = "عکس انتخاب شد. برای شروع، دکمه‌ی تبدیل را بزنید."
+            progressText.text = uris.size.toString() +
+                    " عکس انتخاب شد. برای شروع، دکمه‌ی تبدیل را بزنید."
             resultText.text = ""
         } catch (e: Exception) {
             progressText.text = "خطا در خواندن عکس: " + e.message
@@ -269,9 +283,9 @@ class MainActivity : Activity() {
 
     private fun startConversion() {
         if (busy) return
-        val uri = selectedUri
-        if (uri == null) {
-            progressText.text = "ابتدا یک عکس انتخاب کنید"
+        val uris = selectedUris.toList()
+        if (uris.isEmpty()) {
+            progressText.text = "ابتدا حداقل یک عکس انتخاب کنید"
             return
         }
         val space = currentSpace()
@@ -283,9 +297,6 @@ class MainActivity : Activity() {
 
         Thread {
             try {
-                postProgress("در حال آماده‌سازی عکس…")
-                val jpeg = ImageUtil.prepareJpeg(this, uri)
-
                 val client = HfClient(space, token)
                 postProgress("در حال اتصال به Space…")
                 val info = client.fetchInfo()
@@ -303,13 +314,17 @@ class MainActivity : Activity() {
                     }
                 }
 
-                postProgress("در حال آپلود عکس…")
-                val uploaded = client.upload(jpeg, "image.jpg", "image/jpeg")
+                val uploaded = ArrayList<JSONObject>()
+                for ((i, u) in uris.withIndex()) {
+                    postProgress("در حال آماده‌سازی و آپلود عکس " + (i + 1) + " از " + uris.size + "…")
+                    val jpeg = ImageUtil.prepareJpeg(this, u)
+                    uploaded.add(client.upload(jpeg, "image_" + (i + 1) + ".jpg", "image/jpeg"))
+                }
 
                 val t0 = System.currentTimeMillis()
                 postProgress("در حال حذف پس‌زمینه…")
                 val preResult = client.callEndpoint(
-                    preName, client.buildArgs(info, preName, listOf(uploaded))
+                    preName, client.buildArgs(info, preName, uploaded)
                 ) {
                     val sec = (System.currentTimeMillis() - t0) / 1000
                     postProgress("در حال حذف پس‌زمینه… ($sec ثانیه)")
