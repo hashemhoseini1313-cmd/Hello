@@ -11,8 +11,21 @@ class HfClient(spaceInput: String, private val token: String?) {
 
     class HfException(message: String) : Exception(message)
 
+    class Quality(
+        val label: String,
+        val ssSteps: Int?,
+        val slatSteps: Int?,
+        val meshSimplify: Double?
+    )
+
     companion object {
         const val DEFAULT_SPACE = "Stable-X/ReconViaGen"
+
+        val PRESETS = listOf(
+            Quality("سریع (تنظیمات پیش‌فرض Space)", null, null, null),
+            Quality("متعادل (کیفیت بهتر، کمی کندتر)", 20, 20, 0.93),
+            Quality("بالا (بهترین، ممکن است زمان GPU تمام شود)", 30, 30, 0.90)
+        )
 
         fun normalizeHost(input: String): String {
             var s = input.trim().trimEnd('/')
@@ -141,7 +154,12 @@ class HfClient(spaceInput: String, private val token: String?) {
         return arr
     }
 
-    fun buildArgs(info: JSONObject, endpoint: String, files: List<JSONObject>): JSONArray {
+    fun buildArgs(
+        info: JSONObject,
+        endpoint: String,
+        files: List<JSONObject>,
+        quality: Quality? = null
+    ): JSONArray {
         val ep = info.getJSONObject("named_endpoints").getJSONObject(endpoint)
         val params = ep.getJSONArray("parameters")
         val out = JSONArray()
@@ -152,6 +170,12 @@ class HfClient(spaceInput: String, private val token: String?) {
             val hasDefault = p.optBoolean("parameter_has_default", false)
             val def: Any? = if (hasDefault) p.opt("parameter_default") else null
             val usableDefault = def != null && def != JSONObject.NULL
+            val override: Any? = if (quality == null) null else when (pname) {
+                "ss_sampling_steps" -> quality.ssSteps
+                "slat_sampling_steps" -> quality.slatSteps
+                "mesh_simplify" -> quality.meshSimplify
+                else -> null
+            }
             val known: Any? = when (pname) {
                 "ss_guidance_strength" -> 7.5
                 "ss_sampling_steps" -> 12
@@ -165,6 +189,7 @@ class HfClient(spaceInput: String, private val token: String?) {
             when {
                 pname == "seed" -> out.put(Random.nextInt(0, 2000000000))
                 pname == "texture_size" -> out.put(2048)
+                override != null -> out.put(override)
                 comp == "Gallery" || pname == "multiimages" || pname == "images" ->
                     out.put(galleryOf(files))
                 comp == "Image" || pname == "image" -> out.put(files.first())
