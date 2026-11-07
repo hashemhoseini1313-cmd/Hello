@@ -22,7 +22,8 @@ class MainActivity : Activity() {
 
     private lateinit var store: SecureStore
     private lateinit var status: TextView
-    private lateinit var keyInput: EditText
+    private lateinit var tokenInput: EditText
+    private lateinit var spaceInput: EditText
     private lateinit var preview: ImageView
     private lateinit var startBtn: Button
     private lateinit var progressText: TextView
@@ -64,14 +65,14 @@ class MainActivity : Activity() {
             setPadding(0, dp(16), 0, dp(16))
         }
 
-        val keyLabel = TextView(this).apply {
-            text = "کلید API سایت Tripo"
+        val tokenLabel = TextView(this).apply {
+            text = "توکن Hugging Face (اختیاری، سهمیه‌ی رایگان را بیشتر می‌کند)"
             textSize = 16f
             typeface = font
         }
 
-        keyInput = EditText(this).apply {
-            hint = "کلید را اینجا بچسبانید"
+        tokenInput = EditText(this).apply {
+            hint = "توکن را اینجا بچسبانید"
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
             layoutDirection = View.LAYOUT_DIRECTION_LTR
             textDirection = View.TEXT_DIRECTION_LTR
@@ -80,22 +81,16 @@ class MainActivity : Activity() {
         }
 
         val saveBtn = Button(this).apply {
-            text = "ذخیره کلید"
+            text = "ذخیره توکن"
             typeface = font
-            setOnClickListener { saveKey() }
-        }
-
-        val testBtn = Button(this).apply {
-            text = "تست کلید (بدون مصرف اعتبار)"
-            typeface = font
-            setOnClickListener { testKey() }
+            setOnClickListener { saveToken() }
         }
 
         val deleteBtn = Button(this).apply {
-            text = "حذف کلید"
+            text = "حذف توکن"
             typeface = font
             setOnClickListener {
-                store.clearTripoKey()
+                store.clear("hf")
                 refreshStatus()
             }
         }
@@ -104,7 +99,30 @@ class MainActivity : Activity() {
             textSize = 16f
             gravity = Gravity.CENTER
             typeface = font
-            setPadding(0, dp(8), 0, dp(24))
+            setPadding(0, dp(8), 0, dp(16))
+        }
+
+        val spaceLabel = TextView(this).apply {
+            text = "آدرس Space (اگر کار نکرد، Space دیگری را جایگزین کنید)"
+            textSize = 16f
+            typeface = font
+        }
+
+        val savedSpace = getSharedPreferences("settings", MODE_PRIVATE)
+            .getString("space", HfClient.DEFAULT_SPACE) ?: HfClient.DEFAULT_SPACE
+        spaceInput = EditText(this).apply {
+            setText(savedSpace)
+            inputType = InputType.TYPE_CLASS_TEXT
+            layoutDirection = View.LAYOUT_DIRECTION_LTR
+            textDirection = View.TEXT_DIRECTION_LTR
+            typeface = font
+            setSingleLine(true)
+        }
+
+        val testBtn = Button(this).apply {
+            text = "تست اتصال به Space"
+            typeface = font
+            setOnClickListener { testConnection() }
         }
 
         val pickBtn = Button(this).apply {
@@ -142,15 +160,20 @@ class MainActivity : Activity() {
         }
 
         content.addView(title)
-        content.addView(keyLabel)
-        content.addView(keyInput, LinearLayout.LayoutParams(
+        content.addView(tokenLabel)
+        content.addView(tokenInput, LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT,
             LinearLayout.LayoutParams.WRAP_CONTENT
         ))
         content.addView(saveBtn)
-        content.addView(testBtn)
         content.addView(deleteBtn)
         content.addView(status)
+        content.addView(spaceLabel)
+        content.addView(spaceInput, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ))
+        content.addView(testBtn)
         content.addView(pickBtn)
         content.addView(preview, LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT, dp(220)
@@ -163,49 +186,54 @@ class MainActivity : Activity() {
         refreshStatus()
     }
 
-    private fun saveKey() {
-        val raw = keyInput.text.toString()
-        // فقط حروف انگلیسی، عدد و علامت‌های معمولی؛ کاراکترهای نامرئی حذف می‌شوند
+    private fun saveToken() {
+        val raw = tokenInput.text.toString()
         val k = raw.filter { it.code in 33..126 }
         if (k.isEmpty()) {
-            status.text = "ابتدا کلید را وارد کنید"
+            status.text = "ابتدا توکن را وارد کنید"
             return
         }
         try {
-            store.saveTripoKey(k)
-            keyInput.setText("")
+            store.save("hf", k)
+            tokenInput.setText("")
             val imm = getSystemService(INPUT_METHOD_SERVICE) as InputMethodManager
-            imm.hideSoftInputFromWindow(keyInput.windowToken, 0)
+            imm.hideSoftInputFromWindow(tokenInput.windowToken, 0)
             refreshStatus()
-            if (k.length != raw.length) {
-                progressText.text = "توجه: " + (raw.length - k.length) +
-                        " کاراکتر اضافه یا نامرئی از کلید حذف شد."
-            }
         } catch (e: Exception) {
             status.text = "خطا در ذخیره: " + e.message
         }
     }
 
     private fun refreshStatus() {
-        val k = store.loadTripoKey()
+        val k = store.load("hf")
         status.text = if (k == null) {
-            "هنوز کلیدی ذخیره نشده است"
+            "بدون توکن (سهمیه‌ی رایگان کمتر است)"
         } else {
-            "کلید ذخیره شده ✅\nشروع: " + k.take(4) + "  پایان: " + k.takeLast(4) +
-                    "  طول: " + k.length
+            "توکن ذخیره شده ✅  (••••" + k.takeLast(4) + ")"
         }
     }
 
-    private fun testKey() {
-        val key = store.loadTripoKey()
-        if (key == null) {
-            progressText.text = "ابتدا کلید Tripo را ذخیره کنید"
-            return
-        }
-        progressText.text = "در حال تست کلید…"
+    private fun currentSpace(): String {
+        val s = spaceInput.text.toString().trim()
+        val space = if (s.isEmpty()) HfClient.DEFAULT_SPACE else s
+        getSharedPreferences("settings", MODE_PRIVATE).edit().putString("space", space).apply()
+        return space
+    }
+
+    private fun testConnection() {
+        val space = currentSpace()
+        val token = store.load("hf")
+        progressText.text = "در حال اتصال به Space…"
         Thread {
-            val result = TripoClient(key).diagnose()
-            runOnUiThread { progressText.text = result }
+            try {
+                val client = HfClient(space, token)
+                val info = client.fetchInfo()
+                runOnUiThread {
+                    progressText.text = "اتصال موفق ✅\n" + client.describe(info)
+                }
+            } catch (e: Exception) {
+                runOnUiThread { progressText.text = "خطا: " + e.message }
+            }
         }.start()
     }
 
@@ -245,11 +273,8 @@ class MainActivity : Activity() {
             progressText.text = "ابتدا یک عکس انتخاب کنید"
             return
         }
-        val key = store.loadTripoKey()
-        if (key == null) {
-            progressText.text = "ابتدا کلید Tripo را ذخیره کنید"
-            return
-        }
+        val space = currentSpace()
+        val token = store.load("hf")
 
         busy = true
         startBtn.isEnabled = false
@@ -260,21 +285,40 @@ class MainActivity : Activity() {
                 postProgress("در حال آماده‌سازی عکس…")
                 val jpeg = ImageUtil.prepareJpeg(this, uri)
 
-                val client = TripoClient(key)
+                val client = HfClient(space, token)
+                postProgress("در حال اتصال به Space…")
+                val info = client.fetchInfo()
+                val preName = client.findEndpoint(info, "/preprocess_image")
+                val genName = client.findEndpoint(info, "/generate_and_extract_glb")
+
                 postProgress("در حال آپلود عکس…")
-                val token = client.uploadImage(jpeg)
+                val uploaded = client.upload(jpeg, "image.jpg", "image/jpeg")
 
-                postProgress("در حال ساخت وظیفه در Tripo…")
-                val taskId = client.createTask(token)
-
-                val modelUrl = client.waitForModelUrl(taskId) { st, p ->
-                    postProgress("در حال ساخت مدل… $p% ($st)")
+                val t0 = System.currentTimeMillis()
+                postProgress("در حال حذف پس‌زمینه…")
+                val preResult = client.callEndpoint(
+                    preName, client.buildArgs(info, preName, uploaded)
+                ) {
+                    val sec = (System.currentTimeMillis() - t0) / 1000
+                    postProgress("در حال حذف پس‌زمینه… ($sec ثانیه)")
                 }
+                val processed = client.firstFile(preResult)
+                    ?: throw HfClient.HfException("خروجی حذف پس‌زمینه فایل نداشت: " + preResult.toString().take(200))
+
+                val t1 = System.currentTimeMillis()
+                val genResult = client.callEndpoint(
+                    genName, client.buildArgs(info, genName, processed)
+                ) {
+                    val sec = (System.currentTimeMillis() - t1) / 1000
+                    postProgress("در حال ساخت مدل روی سرور رایگان… ($sec ثانیه)\nصبور باشید، ممکن است چند دقیقه طول بکشد.")
+                }
+                val glbUrl = client.findGlbUrl(genResult)
+                    ?: throw HfClient.HfException("فایل GLB در خروجی نبود: " + genResult.toString().take(300))
 
                 postProgress("در حال دانلود مدل…")
                 val dir = File(filesDir, "models").apply { mkdirs() }
                 val file = File(dir, "model_" + System.currentTimeMillis() + ".glb")
-                client.download(modelUrl, file)
+                client.download(glbUrl, file)
 
                 runOnUiThread {
                     progressText.text = "تمام شد ✅"
